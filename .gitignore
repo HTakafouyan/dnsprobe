@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+publish/
+publish-single/
+test-sc/
+artifacts/
+TestResults/
+
+# Compiled binaries and debug symbols - never commit these
+*.exe
+*.dll
+*.pdb
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Local NuGet workarounds
+nuget.config
+*.nupkg
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

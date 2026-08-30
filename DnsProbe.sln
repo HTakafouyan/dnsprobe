@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DnsProbe", "src\DnsProbe\DnsProbe.csproj", "{4E1F3B21-9E0D-4C77-A6B1-8D3A0C2E7F01}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DnsProbe.Tests", "tests\DnsProbe.Tests\DnsProbe.Tests.csproj", "{7C2D5A88-1B34-4F92-9E55-2A6C4D8B1E23}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4E1F3B21-9E0D-4C77-A6B1-8D3A0C2E7F01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4E1F3B21-9E0D-4C77-A6B1-8D3A0C2E7F01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4E1F3B21-9E0D-4C77-A6B1-8D3A0C2E7F01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4E1F3B21-9E0D-4C77-A6B1-8D3A0C2E7F01}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7C2D5A88-1B34-4F92-9E55-2A6C4D8B1E23}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7C2D5A88-1B34-4F92-9E55-2A6C4D8B1E23}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7C2D5A88-1B34-4F92-9E55-2A6C4D8B1E23}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7C2D5A88-1B34-4F92-9E55-2A6C4D8B1E23}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

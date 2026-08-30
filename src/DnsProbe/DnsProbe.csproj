@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Plain net8.0 on purpose. The tool is Windows-only at runtime, but it uses
+         no Windows-desktop APIs, so targeting net8.0 avoids pulling in the
+         WindowsDesktop/AspNetCore runtime packs when publishing self-contained.
+         With the .NET 10 SDK you can change this to net10.0 - no source changes. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>dnsprobe</AssemblyName>
+    <RootNamespace>DnsProbe</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Version>1.0.0</Version>
+    <Description>DNS diagnostic tool with explicit network interface / source IP selection.</Description>
+  </PropertyGroup>
+
+</Project>
