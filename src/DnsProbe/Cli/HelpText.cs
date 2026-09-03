@@ -2,7 +2,7 @@ namespace DnsProbe.Cli;
 
 public static class HelpText
 {
-    public const string Version = "1.0.0";
+    public const string Version = "1.1.0";
 
     public static string Build() => """
 dnsprobe - DNS diagnostics with explicit interface and source IP selection
@@ -18,6 +18,8 @@ QUERY
   -t, --type <type>            A, AAAA, CNAME, MX, NS, TXT, PTR, SOA, SRV, ANY or TYPEnnn.
                                Defaults to A, or to PTR when the argument is an IP address.
       --no-recurse             Clear the RD (recursion desired) flag.
+      --class <class>          Query class: IN (default), CH, HS, ANY or a number.
+                               version.bind and id.server only answer in class CH.
 
 INTERFACE / SOURCE SELECTION
   -i, --interface <name>       Send the query from this adapter, e.g. "Ethernet 2".
@@ -57,9 +59,20 @@ DIAGNOSTICS
   -v, --verbose                Show the full probe header, flags and every section.
       --debug                  Also print packet hex dumps. Implies --verbose.
       --route-check            Show what the Windows routing table would do for this destination.
+      --trace                  Walk the delegation chain from the root servers down to the
+                               authoritative server, one line per hop. Ignores --server;
+                               add --verbose to list the name servers at each level.
+      --trace-servers <n>      How many name servers to try per level before giving up on it
+                               (1-13, default 3). Implies --trace. Raise it on a lossy path,
+                               lower it to fail faster on a blocked one.
       --compare                Run the same query from every eligible interface and compare.
+                               Host-internal virtual switches (Hyper-V, WSL, Docker, VM
+                               adapters) are skipped: they cannot reach an external server
+                               by design, so testing them proves nothing.
+      --compare-all            As --compare, but include those virtual adapters too.
       --interfaces             List the network interfaces and exit.
       --all                    With --interfaces: also show loopback and inactive adapters.
+      --short                  Print only the answer values, one per line. Nothing else.
       --json                   Emit one JSON document instead of human readable output.
                                Implies --no-color.
       --no-color               Plain output with no ANSI colour. Colour is also disabled
@@ -80,6 +93,10 @@ EXAMPLES
   dnsprobe example.com --server 8.8.8.8 --dnssec --verbose
   dnsprobe example.com --server 8.8.8.8 --nsid --verbose
   dnsprobe example.com --server 8.8.8.8 --json
+  dnsprobe example.com --server 8.8.8.8 --short
+  dnsprobe example.com --trace
+  dnsprobe example.com --trace --interface "Ethernet 2"
+  dnsprobe version.bind --type TXT --class CH --server 8.8.8.8 --no-recurse
 
 EXIT CODES
   0  a DNS response with RCODE=NOERROR was received

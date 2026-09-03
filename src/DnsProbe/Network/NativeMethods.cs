@@ -55,6 +55,37 @@ internal static class NativeMethods
     [DllImport("iphlpapi.dll", ExactSpelling = true, SetLastError = false)]
     internal static extern uint GetBestInterfaceEx(IntPtr destinationAddress, out uint bestIfIndex);
 
+    // ------------------------------------------------------------------ neighbour (ARP/ND) table
+
+    /// <summary>
+    /// sizeof(MIB_IPNET_ROW2). Field offsets below are for the x64 layout:
+    ///   SOCKADDR_INET Address            at   0 (28 bytes)
+    ///   NET_IFINDEX   InterfaceIndex     at  28 (ULONG)
+    ///   NET_LUID      InterfaceLuid      at  32 (ULONG64, forces 8 byte alignment)
+    ///   UCHAR         PhysicalAddress[32] at 40
+    ///   ULONG         PhysicalAddressLength at 72
+    ///   NL_NEIGHBOR_STATE State          at  76 (enum, ULONG)
+    ///   UCHAR         Flags              at  80
+    ///   ULONG         ReachabilityTime   at  84
+    /// </summary>
+    internal const int IpNetRow2Size = 88;
+
+    internal const int OffsetNeighbourAddress = 0;
+    internal const int OffsetNeighbourInterfaceIndex = 28;
+    internal const int OffsetNeighbourPhysicalAddress = 40;
+    internal const int OffsetNeighbourPhysicalAddressLength = 72;
+    internal const int OffsetNeighbourState = 76;
+
+    /// <summary>The destination is not in the neighbour table at all.</summary>
+    internal const uint ERROR_NOT_FOUND = 1168;
+
+    /// <summary>
+    /// Reads one entry from the neighbour cache (the ARP table for IPv4, the neighbour discovery
+    /// cache for IPv6). The Address and InterfaceIndex fields must be filled in before the call.
+    /// </summary>
+    [DllImport("iphlpapi.dll", ExactSpelling = true, SetLastError = false)]
+    internal static extern uint GetIpNetEntry2(IntPtr row);
+
     /// <summary>Serialises an <see cref="IPAddress"/> into a SOCKADDR_INET buffer.</summary>
     internal static byte[] CreateSockaddrInet(IPAddress address)
     {

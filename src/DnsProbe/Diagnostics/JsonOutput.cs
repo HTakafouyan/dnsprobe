@@ -146,7 +146,12 @@ public static class JsonOutput
 
     // ---------------------------------------------------------------- compare
 
-    public static void WriteComparison(IReadOnlyList<ComparisonRow> rows, ProbeContext context, int exitCode)
+    public static void WriteComparison(
+        IReadOnlyList<ComparisonRow> rows,
+        ProbeContext context,
+        int exitCode,
+        IReadOnlyList<string>? diagnosis = null,
+        int skippedCount = 0)
     {
         var list = new List<object>();
         int succeeded = 0;
@@ -182,7 +187,52 @@ public static class JsonOutput
             serverPort = context.Server.Port,
             interfacesTested = rows.Count,
             interfacesSucceeded = succeeded,
+            interfacesSkipped = skippedCount,
             results = list,
+            diagnosis = diagnosis ?? Array.Empty<string>(),
+        });
+    }
+
+    // ---------------------------------------------------------------- trace
+
+    public static void WriteTrace(TraceResult trace, ProbeContext context, int exitCode)
+    {
+        var steps = new List<object>(trace.Steps.Count);
+
+        foreach (TraceStep step in trace.Steps)
+        {
+            steps.Add(new
+            {
+                zone = step.Zone,
+                server = step.ServerName,
+                serverAddress = step.ServerAddress.ToString(),
+                outcome = step.Outcome.ToString(),
+                roundTripMs = Round(step.RoundTripMilliseconds),
+                nextZone = step.NextZone,
+                nextServerCount = step.NextServerCount,
+                flags = step.Response?.Header.FlagsString(),
+                flagAnomalies = TraceFlagCheck.Anomalies(step),
+                notes = step.Notes,
+                error = step.Error,
+            });
+        }
+
+        Write(new
+        {
+            tool = "dnsprobe",
+            version = Cli.HelpText.Version,
+            timestamp = Timestamp(),
+            status = trace.Succeeded ? "ok" : "failed",
+            exitCode,
+            query = QueryBlock(context),
+            trace = new
+            {
+                steps,
+                stoppedBecause = trace.StoppedBecause,
+                elapsedMs = Round(trace.Elapsed.TotalMilliseconds),
+                authoritative = trace.Answer?.Header.AuthoritativeAnswer,
+            },
+            answers = trace.Answer is null ? new List<object>() : Records(trace.Answer.Answers),
         });
     }
 

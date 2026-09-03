@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [1.1.0] - 2026-09-03
+
+A diagnostics release. 1.0 could tell you that a query failed; this one tells you where it failed
+and, where the evidence supports it, what that means.
+
+### Added
+
+- **`--trace`**: walks the delegation chain from the root servers down to the authoritative server,
+  asking each level itself with recursion disabled. One line per hop, because `dig +trace` prints
+  every NS record of every level and buries the fact the reader came for. Root server addresses are
+  hard-coded, since asking a resolver where the root servers are would defeat the point of starting
+  at the root. A referral with no glue stops the walk and says so rather than falling back to a
+  resolver.
+- **`--trace-servers <n>`**: how many name servers to try per level before giving up on it (1-13,
+  default 3). If one does not answer the next is tried, and the dead server is reported rather than
+  quietly stepped over.
+- **Trace flag checks**: header flags are compared against what each step should have produced and
+  shown only when they depart from it. A referral should carry `qr` alone and an authoritative
+  answer `qr aa`; root and TLD servers never set `ra`, so `ra` at those levels means something
+  other than that server replied.
+- **`Probe Stages`**: a stage-by-stage account of how far a query got - interface, route, next hop,
+  socket, send, receive, DNS answer - each with the evidence behind its verdict. Shown on failure
+  and with `--verbose`.
+- **Neighbour cache lookup** (`GetIpNetEntry2`): checks whether the next hop actually answers at
+  layer 2. A route can exist on paper while the gateway never replies to ARP or neighbour
+  discovery, in which case every packet is dropped locally - otherwise indistinguishable from a
+  filtered path.
+- **`Diagnosis`**: with `--compare`, states what follows from the results across interfaces. If one
+  path got an answer the server is demonstrably up, so a failure elsewhere is demonstrably
+  path-specific. Deductions only; there is deliberately no list of "likely causes".
+- **`--short`**: answer values only, one per line, for shell pipelines.
+- **`--class <class>`**: query class selection (IN, CS, CH, HS, ANY or numeric). `version.bind` and
+  `id.server` are only meaningful in class CH; asking for them in class IN returns NXDOMAIN from
+  every server, which is what this tool used to do.
+- **`--compare-all`**: includes host-internal virtual switches in the comparison, which `--compare`
+  now skips.
+- **A task-oriented interactive mode**: asks what you want to do first, then only the questions
+  that task needs, and prints the equivalent command line before running so the mode teaches
+  itself out of a job.
+- `flags`, `flagAnomalies`, `observations`, `diagnosis`, `fallbacks`, `interfacesSkipped` and a
+  full `trace` object in the JSON output.
+
+### Changed
+
+- `--compare` skips Hyper-V, WSL, Docker, VMware and VirtualBox adapters and reports how many were
+  skipped. Those adapters connect the host to its guests and have no route to an external resolver
+  by design, so testing them produced a guaranteed failure that carried no information.
+- Comparison table columns are sized from the data instead of a fixed width that truncated most
+  Windows adapter names.
+- The comparison summary says how many interfaces were *tested* and how many were skipped, rather
+  than implying the machine has no other adapters.
+- In `--trace` the header no longer prints a configured DNS server address, because trace mode does
+  not use one.
+- The `Observations` TTL check is skipped when any response is authoritative. An authoritative
+  server serves the TTL from its zone file and never counts it down, so the check produced a false
+  alarm on every correctly configured internal DNS server. It also now requires a five second
+  window and says so when it has less.
+- The misleading `Sending query...` line was removed; it was printed as part of the result, so on a
+  failed query it appeared after the errors it supposedly preceded.
+- Socket-level refusal is reported as `PORT-UNREACH` instead of `REFUSED`. `REFUSED` is the DNS
+  RCODE - a real server declining the query - and using one name for both hid the difference
+  between "nothing is listening" and "the server said no".
+- Win32 errors 1231 and 1232 from `GetBestRoute2` are translated into "no route to the
+  destination". They are a diagnostic answer, not an API malfunction, and were being presented as
+  the latter.
+- The project targets `net8.0` rather than `net8.0-windows`. Nothing in the tool uses a Windows
+  desktop API, and the narrower target avoids pulling the WindowsDesktop and AspNetCore runtime
+  packs into a self-contained publish.
+
+### Fixed
+
+- A `WSAEINVAL` on a pinned socket is reported as `IF-UNREACH` with an explanation, instead of a
+  generic socket failure. It means the pinned interface has no route to the destination - Windows
+  reports it this way because `IP_UNICAST_IF` forbids falling back to another interface.
+- A TCP connect that hit the timeout crashed with an unhandled `ObjectDisposedException`: the
+  runtime disposes the socket when an async connect is cancelled, and the local endpoint was read
+  afterwards. Endpoint reads are now safe and the timeout is reported as a timeout.
+- The EDNS fallback message was lost whenever a later retry became the final attempt. It is now
+  reported from the overall result rather than from one attempt's notes.
+- The OPT pseudo-record no longer appears in the additional section, where it was shown a second
+  time as an undecodable raw record.
+- Adapters described as "Fortinet …" are classified as VPN. The keyword list matched only
+  "forticlient", so the actual adapter name was labelled as physical Ethernet.
+- Parse errors printed the "run --help" hint twice.
+- `Math.Min` calls in the parser were ambiguous between the `int` and `ushort` overloads and did
+  not compile.
+
 ## [1.0.0] - 2026-08-30
 
 First release.
@@ -55,5 +142,6 @@ First release.
   responder's endpoint and transaction ID before a response is accepted.
 - No `unsafe` code anywhere.
 
-[Unreleased]: https://github.com/HTakafouyan/dnsprobe/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/HTakafouyan/dnsprobe/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/HTakafouyan/dnsprobe/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/HTakafouyan/dnsprobe/releases/tag/v1.0.0

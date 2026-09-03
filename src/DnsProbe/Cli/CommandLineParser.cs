@@ -343,6 +343,57 @@ public static class CommandLineParser
                     options.Json = true;
                     break;
 
+                case "--short":
+                    options.Short = true;
+                    break;
+
+                case "--trace":
+                    options.Trace = true;
+                    break;
+
+                case "--trace-servers":
+                {
+                    if (!TryTakeValue(args, ref i, inlineValue, name, out string? value, out string? error))
+                    {
+                        return ParseResult.Fail(error!);
+                    }
+
+                    if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int count)
+                        || count < 1
+                        || count > 13)
+                    {
+                        return ParseResult.Fail(
+                            $"--trace-servers expects a number between 1 and 13, got \"{value}\".");
+                    }
+
+                    options.Trace = true;
+                    options.TraceServersPerLevel = count;
+                    break;
+                }
+
+                case "--compare-all":
+                    options.Compare = true;
+                    options.CompareAll = true;
+                    break;
+
+                case "--class":
+                {
+                    if (!TryTakeValue(args, ref i, inlineValue, name, out string? value, out string? error))
+                    {
+                        return ParseResult.Fail(error!);
+                    }
+
+                    if (!TryParseRecordClass(value!, out DnsRecordClass recordClass))
+                    {
+                        return ParseResult.Fail(
+                            $"Unknown record class \"{value}\". Supported: IN, CS, CH, HS, ANY, "
+                            + "or a numeric class.");
+                    }
+
+                    options.RecordClass = recordClass;
+                    break;
+                }
+
                 case "--no-edns":
                     options.UseEdns = false;
                     break;
@@ -437,6 +488,23 @@ public static class CommandLineParser
             && !DnsName.TryValidate(options.QueryName, out string? ptrError))
         {
             return ptrError;
+        }
+
+        if (options.Trace && options.Compare)
+        {
+            return "--trace walks the delegation chain from the root servers, so it cannot be "
+                   + "combined with --compare.";
+        }
+
+        if (options.Trace && options.UseSystemDns)
+        {
+            return "--trace starts at the root servers and does not use a configured resolver, so "
+                   + "--system-dns has no meaning with it.";
+        }
+
+        if (options.Trace && options.Count > 1)
+        {
+            return "--trace cannot be combined with --count.";
         }
 
         if (!options.UseEdns && (options.DnssecOk || options.RequestNsid))
@@ -594,6 +662,27 @@ public static class CommandLineParser
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Parses a DNS class. CH matters more than it looks: version.bind and id.server are only
+    /// meaningful in class CH, and asking for them in class IN returns NXDOMAIN from every server.
+    /// </summary>
+    public static bool TryParseRecordClass(string text, out DnsRecordClass recordClass)
+    {
+        if (Enum.TryParse(text, ignoreCase: true, out recordClass) && Enum.IsDefined(recordClass))
+        {
+            return true;
+        }
+
+        if (ushort.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out ushort numeric))
+        {
+            recordClass = (DnsRecordClass)numeric;
+            return true;
+        }
+
+        recordClass = DnsRecordClass.IN;
+        return false;
     }
 
     public static bool TryParseRecordType(string text, out DnsRecordType type)

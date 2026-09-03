@@ -56,7 +56,24 @@ public sealed class ProbeOptions
 
     public bool RouteCheck { get; set; }
 
+    /// <summary>
+    /// Walk the delegation chain from the root servers down instead of asking one resolver.
+    /// </summary>
+    public bool Trace { get; set; }
+
+    /// <summary>
+    /// How many name servers to try at each level of a trace before giving up on that level.
+    /// Every server for a zone holds the same data, so this only matters when servers do not answer.
+    /// </summary>
+    public int TraceServersPerLevel { get; set; } = DnsTracer.DefaultServersPerLevel;
+
     public bool Compare { get; set; }
+
+    /// <summary>
+    /// Include host-internal virtual switches (Hyper-V, WSL, Docker, VM adapters) in --compare.
+    /// They are skipped by default because they cannot reach an external server by design.
+    /// </summary>
+    public bool CompareAll { get; set; }
 
     public AddressFamily? ForcedFamily { get; set; }
 
@@ -75,6 +92,15 @@ public sealed class ProbeOptions
 
     /// <summary>Emit a single JSON document instead of human readable output.</summary>
     public bool Json { get; set; }
+
+    /// <summary>Print only the answer values, one per line, and nothing else.</summary>
+    public bool Short { get; set; }
+
+    /// <summary>
+    /// Query class. Almost always IN; CH is what version.bind and id.server require, so asking
+    /// those questions in class IN - as this tool used to - simply gets NXDOMAIN.
+    /// </summary>
+    public DnsRecordClass RecordClass { get; set; } = DnsRecordClass.IN;
 
     /// <summary>Send an EDNS(0) OPT record. On by default.</summary>
     public bool UseEdns { get; set; } = true;

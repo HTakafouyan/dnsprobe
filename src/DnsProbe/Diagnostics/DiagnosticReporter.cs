@@ -168,7 +168,11 @@ public sealed class DiagnosticReporter
 
     // ---------------------------------------------------------------- probe header
 
-    public void WriteProbeHeader(ProbeContext context, bool verbose)
+    /// <param name="trace">
+    /// True in --trace mode, where the configured DNS server is not used at all: the walk starts at
+    /// the root servers. Printing a server address the run never contacts would be a lie.
+    /// </param>
+    public void WriteProbeHeader(ProbeContext context, bool verbose, bool trace = false)
     {
         WriteHeading("DNS Probe");
         WriteField("Query", context.QueryName, 16);
@@ -204,9 +208,21 @@ public sealed class DiagnosticReporter
                 : _theme.Selected(context.SourceAddress.ToString()),
             16);
 
-        WriteField("DNS Server", context.Server.Address.ToString(), 16);
-        WriteField("Server Source", context.ServerSource, 16);
-        WriteField("Destination Port", context.Server.Port.ToString(CultureInfo.InvariantCulture), 16);
+        if (trace)
+        {
+            WriteField("Start", _theme.Selected("root servers (delegation trace)"), 16);
+            WriteField(
+                "Resolver",
+                _theme.Label("not used - each level is asked directly, with recursion disabled"),
+                16);
+        }
+        else
+        {
+            WriteField("DNS Server", context.Server.Address.ToString(), 16);
+            WriteField("Server Source", context.ServerSource, 16);
+            WriteField("Destination Port", context.Server.Port.ToString(CultureInfo.InvariantCulture), 16);
+        }
+
         WriteField("Timeout", $"{context.TimeoutMilliseconds} ms", 16);
 
         if (verbose)
@@ -608,10 +624,28 @@ public sealed class DiagnosticReporter
 
     public void WriteComparisonTable(IReadOnlyList<ComparisonRow> rows)
     {
+        // Windows adapter names are long ("vEthernet (WSL (Hyper-V firewall))"), so the column is
+        // sized from the actual data instead of a fixed width that would truncate most of them.
+        int nameWidth = "Interface".Length;
+        int sourceWidth = "Source IP".Length;
+
+        foreach (ComparisonRow row in rows)
+        {
+            nameWidth = Math.Max(nameWidth, row.InterfaceName.Length);
+            sourceWidth = Math.Max(sourceWidth, row.SourceAddress.Length);
+        }
+
+        // A ceiling keeps one pathological name from pushing the table off the screen.
+        nameWidth = Math.Min(nameWidth, 40);
+        sourceWidth = Math.Min(sourceWidth, 40);
+
         _out.WriteLine();
         _out.WriteLine(_theme.Heading(
-            $"{"Interface",-24} {"Source IP",-24} {"Result",-14} {"RTT",-10}"));
-        _out.WriteLine(_theme.Label(new string('-', 76)));
+            "Interface".PadRight(nameWidth)
+            + " " + "Source IP".PadRight(sourceWidth)
+            + " " + "Result".PadRight(14)
+            + " RTT"));
+        _out.WriteLine(_theme.Label(new string('-', nameWidth + sourceWidth + 14 + 12)));
 
         foreach (ComparisonRow row in rows)
         {
@@ -621,8 +655,8 @@ public sealed class DiagnosticReporter
                 : _theme.Label("-");
 
             _out.WriteLine(
-                Truncate(row.InterfaceName, 24).PadRight(24)
-                + " " + _theme.Selected(Truncate(row.SourceAddress, 24).PadRight(24))
+                Truncate(row.InterfaceName, nameWidth).PadRight(nameWidth)
+                + " " + _theme.Selected(Truncate(row.SourceAddress, sourceWidth).PadRight(sourceWidth))
                 + " " + _theme.Outcome(row.Result, 14)
                 + " " + rtt);
         }
@@ -672,6 +706,213 @@ public sealed class DiagnosticReporter
         foreach (string observation in observations)
         {
             _out.WriteLine(_theme.Caution("  - " + observation));
+        }
+    }
+
+    /// <summary>
+    /// The --short form: answer values only, one per line, nothing else. Mirrors dig's +short,
+    /// which exists because a script almost never wants the rest of the report.
+    /// </summary>
+    public void WriteShortAnswer(DnsQueryAttempt attempt)
+    {
+        if (!attempt.IsSuccess || attempt.Response is null)
+        {
+            return;
+        }
+
+        foreach (DnsRecord record in attempt.Response.Answers)
+        {
+            if (record.Type != DnsRecordType.OPT)
+            {
+                _out.WriteLine(record.Value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prints the stage list. The evidence column is not decoration: it is what keeps the block
+    /// from over-claiming, so it is never omitted.
+    /// </summary>
+    public void WriteStages(IReadOnlyList<ProbeStage> stages)
+    {
+        if (stages.Count == 0)
+        {
+            return;
+        }
+
+        _out.WriteLine();
+        _out.WriteLine(_theme.Heading("Probe Stages"));
+        _out.WriteLine(_theme.Label(Separator));
+
+        foreach (ProbeStage stage in stages)
+        {
+            string label = stage.Result switch
+            {
+                StageResult.Ok => _theme.Good("OK     "),
+                StageResult.Failed => _theme.Bad("FAILED "),
+                StageResult.Skipped => _theme.Label("SKIPPED"),
+                _ => _theme.Caution("UNKNOWN"),
+            };
+
+            _out.WriteLine($"  {stage.Name.PadRight(12)} {label}  " + _theme.Label(stage.Evidence));
+        }
+    }
+
+    /// <summary>
+    /// Prints a delegation trace.
+    ///
+    /// Deliberately one line per hop. dig's +trace prints every NS record of every level, which is
+    /// hundreds of lines and buries the one fact the reader wants: where the chain broke. The full
+    /// records are available under --verbose for the reader who does want them.
+    /// </summary>
+    public void WriteTrace(TraceResult trace, string queryName, DnsRecordType recordType, bool verbose)
+    {
+        _out.WriteLine();
+        _out.WriteLine(_theme.Heading($"Delegation trace for {queryName} ({recordType.ToDisplayString()})"));
+        _out.WriteLine(_theme.Label(Separator));
+
+        int zoneWidth = 4;
+        foreach (TraceStep step in trace.Steps)
+        {
+            zoneWidth = Math.Max(zoneWidth, step.Zone.Length);
+        }
+
+        zoneWidth = Math.Min(zoneWidth, 30);
+
+        foreach (TraceStep step in trace.Steps)
+        {
+            string zone = Truncate(step.Zone, zoneWidth).PadRight(zoneWidth);
+            string timing = step.RoundTripMilliseconds is double ms
+                ? _theme.RoundTrip(ms)
+                : _theme.Label("-");
+
+            string outcome = step.Outcome switch
+            {
+                TraceStepOutcome.Referral =>
+                    _theme.Label("-> ") + $"{step.NextZone} ({step.NextServerCount} name server(s))",
+                TraceStepOutcome.Answer => _theme.Good("-> ANSWER"),
+                TraceStepOutcome.NoData => _theme.Caution("-> no record of that type"),
+                TraceStepOutcome.NameError => _theme.Caution("-> name does not exist"),
+                _ => _theme.Bad("-> " + (step.Error ?? "no answer")),
+            };
+
+            _out.WriteLine($"  {zone}  {step.ServerName}  " + _theme.Label($"({step.ServerAddress})")
+                           + $"  {timing}  {outcome}");
+
+            foreach (string note in step.Notes)
+            {
+                string indent = new(' ', zoneWidth);
+
+                // A server that refused to answer is shown in red: it is a failure that the walk
+                // stepped over, not a remark about the level.
+                if (note.StartsWith(DnsTracer.SkipNotePrefix, StringComparison.Ordinal))
+                {
+                    _out.WriteLine($"  {indent}  " + _theme.Bad("FAILED  " + note[DnsTracer.SkipNotePrefix.Length..]));
+                }
+                else
+                {
+                    _out.WriteLine($"  {indent}  " + _theme.Caution("note: " + note));
+                }
+            }
+
+            WriteTraceFlags(step, zoneWidth, verbose);
+
+            if (verbose && step.Response is not null)
+            {
+                WriteTraceDetail(step, zoneWidth);
+            }
+        }
+
+        _out.WriteLine();
+
+        if (trace.Answer is DnsMessage answer)
+        {
+            foreach (DnsRecord record in answer.Answers)
+            {
+                _out.WriteLine("  " + _theme.Good(record.Value)
+                               + _theme.Label($"  ({record.Type.ToDisplayString()}, TTL {record.TimeToLive}s)"));
+            }
+
+            string authoritative = answer.Header.AuthoritativeAnswer
+                ? "authoritative"
+                : "NOT authoritative - the answer did not come from a server for this zone";
+
+            _out.WriteLine(_theme.Label($"  {trace.Steps.Count} step(s), "
+                                        + $"{FormatMilliseconds(trace.Elapsed.TotalMilliseconds)} total, ")
+                           + (answer.Header.AuthoritativeAnswer ? _theme.Label(authoritative) : _theme.Caution(authoritative)));
+        }
+        else if (trace.StoppedBecause is not null)
+        {
+            _out.WriteLine("  " + _theme.Caution(trace.StoppedBecause));
+        }
+    }
+
+    /// <summary>
+    /// Shows the header flags. Normal flags are noise on a healthy chain, so by default they only
+    /// appear when they depart from what the step should have produced - and then the departure is
+    /// spelled out rather than left for the reader to spot.
+    /// </summary>
+    private void WriteTraceFlags(TraceStep step, int indent, bool verbose)
+    {
+        if (step.Response is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> anomalies = TraceFlagCheck.Anomalies(step);
+        string pad = new(' ', indent);
+
+        if (anomalies.Count == 0)
+        {
+            if (verbose)
+            {
+                _out.WriteLine($"  {pad}  " + _theme.Label("flags: " + step.Response.Header.FlagsString()));
+            }
+
+            return;
+        }
+
+        _out.WriteLine($"  {pad}  " + _theme.Caution("FLAGS   " + step.Response.Header.FlagsString()));
+
+        foreach (string anomaly in anomalies)
+        {
+            _out.WriteLine($"  {pad}          " + _theme.Caution("unexpected: " + anomaly));
+        }
+    }
+
+    private void WriteTraceDetail(TraceStep step, int indent)
+    {
+        string pad = new(' ', indent + 4);
+
+        if (step.Response is null)
+        {
+            return;
+        }
+
+        foreach (DnsRecord record in step.Response.Authorities)
+        {
+            if (record.Type == DnsRecordType.NS)
+            {
+                _out.WriteLine(_theme.Label($"{pad}NS  {record.Value}"));
+            }
+        }
+    }
+
+    /// <summary>Prints the deductions drawn from comparing several interfaces.</summary>
+    public void WriteDiagnosis(IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return;
+        }
+
+        _out.WriteLine();
+        _out.WriteLine(_theme.Heading("Diagnosis"));
+        _out.WriteLine(_theme.Label(Separator));
+
+        foreach (string line in lines)
+        {
+            _out.WriteLine("  " + line);
         }
     }
 
@@ -737,7 +978,11 @@ public sealed class DiagnosticReporter
         WriteSummary(verdict, $"{received}{average} {context.DescribePath()}");
     }
 
-    public void WriteComparisonSummary(IReadOnlyList<ComparisonRow> rows, IPEndPoint server)
+    /// <param name="skippedCount">
+    /// Adapters that were never tested. Counting only what was tested would read as though the
+    /// machine has no other adapters, so the skipped ones are named in the summary.
+    /// </param>
+    public void WriteComparisonSummary(IReadOnlyList<ComparisonRow> rows, IPEndPoint server, int skippedCount = 0)
     {
         var succeeded = new List<string>();
 
@@ -749,11 +994,15 @@ public sealed class DiagnosticReporter
             }
         }
 
+        string skipped = skippedCount > 0
+            ? $", {skippedCount} skipped"
+            : string.Empty;
+
         if (succeeded.Count == 0)
         {
             WriteSummary(
                 _theme.Bad("UNREACHABLE"),
-                $"none of the {rows.Count} interface(s) could reach {server.Address}");
+                $"0 of {rows.Count} tested interface(s) reached {server.Address}{skipped}");
             return;
         }
 
@@ -761,7 +1010,8 @@ public sealed class DiagnosticReporter
 
         WriteSummary(
             verdict,
-            $"{succeeded.Count} of {rows.Count} interface(s) reached {server.Address}: {string.Join(", ", succeeded)}");
+            $"{succeeded.Count} of {rows.Count} tested interface(s) reached {server.Address}{skipped}: "
+            + string.Join(", ", succeeded));
     }
 }
 

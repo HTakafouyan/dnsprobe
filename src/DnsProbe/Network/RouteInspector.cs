@@ -164,6 +164,83 @@ public sealed class RouteInspector
     }
 
     /// <summary>
+    /// Looks up the next hop in the neighbour cache - the ARP table for IPv4, the neighbour
+    /// discovery cache for IPv6.
+    ///
+    /// This answers a question the routing table cannot: the route may exist on paper while the
+    /// gateway never answers at layer 2. When that happens every packet is dropped locally and the
+    /// query simply times out, which is otherwise indistinguishable from a filtered path.
+    /// </summary>
+    /// <param name="address">The next hop, or the destination itself when it is on-link.</param>
+    /// <param name="interfaceIndex">Interface the neighbour should be reachable on.</param>
+    public NeighbourInfo GetNeighbour(IPAddress address, int interfaceIndex)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return NeighbourInfo.Unavailable("the neighbour cache is only readable on Windows.");
+        }
+
+        IntPtr row = Marshal.AllocHGlobal(NativeMethods.IpNetRow2Size);
+
+        try
+        {
+            ZeroMemory(row, NativeMethods.IpNetRow2Size);
+
+            byte[] sockaddr = NativeMethods.CreateSockaddrInet(address);
+            Marshal.Copy(sockaddr, 0, row + NativeMethods.OffsetNeighbourAddress, sockaddr.Length);
+            Marshal.WriteInt32(row, NativeMethods.OffsetNeighbourInterfaceIndex, interfaceIndex);
+
+            uint status = NativeMethods.GetIpNetEntry2(row);
+
+            if (status == NativeMethods.ERROR_NOT_FOUND)
+            {
+                return NeighbourInfo.Missing(address);
+            }
+
+            if (status != NativeMethods.NO_ERROR)
+            {
+                return NeighbourInfo.Unavailable(
+                    $"GetIpNetEntry2 failed with Win32 error {status} "
+                    + $"({new System.ComponentModel.Win32Exception((int)status).Message}).");
+            }
+
+            byte[] buffer = new byte[NativeMethods.IpNetRow2Size];
+            Marshal.Copy(row, buffer, 0, buffer.Length);
+
+            uint state = NativeMethods.ReadUInt32(buffer, NativeMethods.OffsetNeighbourState);
+            uint macLength = NativeMethods.ReadUInt32(buffer, NativeMethods.OffsetNeighbourPhysicalAddressLength);
+
+            string? mac = null;
+
+            if (macLength is > 0 and <= 32)
+            {
+                var parts = new string[macLength];
+
+                for (int i = 0; i < macLength; i++)
+                {
+                    parts[i] = buffer[NativeMethods.OffsetNeighbourPhysicalAddress + i].ToString("X2");
+                }
+
+                mac = string.Join('-', parts);
+            }
+
+            return NeighbourInfo.Found(address, (NeighbourState)state, mac);
+        }
+        catch (DllNotFoundException)
+        {
+            return NeighbourInfo.Unavailable("iphlpapi.dll is not available.");
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return NeighbourInfo.Unavailable("GetIpNetEntry2 is not available on this Windows version.");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(row);
+        }
+    }
+
+    /// <summary>
     /// Secondary check: which interface index would Windows choose for this destination?
     /// Used to cross-check the GetBestRoute2 answer.
     /// </summary>

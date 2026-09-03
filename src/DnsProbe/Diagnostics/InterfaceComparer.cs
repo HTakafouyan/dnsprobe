@@ -25,6 +25,17 @@ public sealed class InterfaceComparer
         && nic.IndexFor(family) != 0
         && nic.PreferredSourceAddress(family) is not null;
 
+    /// <summary>
+    /// Host-internal virtual switches - Hyper-V, WSL, Docker, VMware, VirtualBox - exist to connect
+    /// the host to guests, not to anything outside. They have no route to an external DNS server and
+    /// never will, so testing them produces a guaranteed failure that carries no information and
+    /// clutters both the table and the diagnosis. They are skipped unless --compare-all is given.
+    /// </summary>
+    public static bool IsHostInternalVirtual(InterfaceInfo nic) =>
+        nic.Category is InterfaceCategory.HyperV
+            or InterfaceCategory.ContainerOrWsl
+            or InterfaceCategory.VirtualMachine;
+
     public async Task<IReadOnlyList<ComparisonRow>> RunAsync(
         IReadOnlyList<InterfaceInfo> interfaces,
         string wireName,
@@ -36,7 +47,9 @@ public sealed class InterfaceComparer
         bool recursionDesired,
         bool useUnicastInterfaceOption,
         CancellationToken cancellationToken,
-        EdnsOptions? edns = null)
+        EdnsOptions? edns = null,
+        bool includeVirtual = false,
+        List<string>? skipped = null)
     {
         var rows = new List<ComparisonRow>();
 
@@ -44,6 +57,12 @@ public sealed class InterfaceComparer
         {
             if (!IsEligible(nic, family))
             {
+                continue;
+            }
+
+            if (!includeVirtual && IsHostInternalVirtual(nic))
+            {
+                skipped?.Add($"{nic.Name} ({nic.CategoryLabel})");
                 continue;
             }
 

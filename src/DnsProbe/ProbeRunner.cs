@@ -126,14 +126,17 @@ public sealed class ProbeRunner
             Edns = options.BuildEdnsOptions(),
         };
 
-        if (!options.Json)
+        // --short and --json both own stdout: no header, no warnings, no chatter.
+        bool quiet = options.Json || options.Short;
+
+        if (!quiet)
         {
-            _reporter.WriteProbeHeader(context, options.Verbose);
+            _reporter.WriteProbeHeader(context, options.Verbose, options.Trace);
             _reporter.WriteWarnings(selection.Warnings);
         }
 
         // ---- route check -------------------------------------------------------------
-        if (options.RouteCheck && !options.Json)
+        if (options.RouteCheck && !quiet)
         {
             RunRouteCheck(context, interfaces);
         }
@@ -142,6 +145,13 @@ public sealed class ProbeRunner
         if (options.Compare)
         {
             return await RunCompareAsync(options, interfaces, context, cancellationToken).ConfigureAwait(false);
+        }
+
+        // ---- trace mode --------------------------------------------------------------
+        if (options.Trace)
+        {
+            return await RunTraceAsync(options, selection, context, family, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         // ---- normal query(s) ---------------------------------------------------------
@@ -161,6 +171,7 @@ public sealed class ProbeRunner
             TimeoutMilliseconds = options.TimeoutMilliseconds,
             RecursionDesired = !options.NoRecursion,
             Transport = options.Transport,
+            RecordClass = options.RecordClass,
             Edns = context.Edns,
         };
 
@@ -179,7 +190,10 @@ public sealed class ProbeRunner
             .QueryAsync(request, options.Retries, options.TcpFallback, cancellationToken)
             .ConfigureAwait(false);
 
-        for (int i = 0; i < result.Attempts.Count - 1 && !options.Json; i++)
+        // Recomputed here: RunAsync has its own copy, but this method is also reached directly.
+        bool quiet = options.Json || options.Short;
+
+        for (int i = 0; i < result.Attempts.Count - 1 && !quiet; i++)
         {
             DnsQueryAttempt failed = result.Attempts[i];
             if (!failed.IsSuccess)
@@ -189,7 +203,7 @@ public sealed class ProbeRunner
             }
         }
 
-        if (result.UsedTcpFallback)
+        if (result.UsedTcpFallback && !quiet)
         {
             _reporter.WriteLine();
             _reporter.WriteLine("The UDP answer was truncated (TC=1); the query was repeated over TCP.");
@@ -197,7 +211,7 @@ public sealed class ProbeRunner
 
         // Printed from the result rather than from a single attempt's notes: with retries the
         // final attempt is often not the one that carried the fallback.
-        if (result.UsedEdnsFallback && !options.Json)
+        if (result.UsedEdnsFallback && !quiet)
         {
             _reporter.WriteLine();
 
@@ -220,6 +234,12 @@ public sealed class ProbeRunner
 
         IReadOnlyList<string> observations = Observations.ForAttempt(result.Final, context);
 
+        if (options.Short && !options.Json)
+        {
+            _reporter.WriteShortAnswer(result.Final);
+            return exitCode;
+        }
+
         if (options.Json)
         {
             JsonOutput.WriteQuery(
@@ -228,6 +248,14 @@ public sealed class ProbeRunner
         }
 
         _reporter.WriteAttempt(result.Final, context, options.Verbose, options.Debug);
+
+        // The stage list earns its space when something went wrong, or when the user asked to see
+        // the detail. Showing it on every successful lookup would just be noise.
+        if (options.Verbose || !result.Final.IsSuccess)
+        {
+            WriteStages(context, result.Final);
+        }
+
         _reporter.WriteObservations(observations);
         _reporter.WriteAttemptSummary(result.Final, context);
         return exitCode;
@@ -333,6 +361,7 @@ public sealed class ProbeRunner
         }
 
         var comparer = new InterfaceComparer(_client);
+        var skipped = new List<string>();
 
         IReadOnlyList<ComparisonRow> rows = await comparer.RunAsync(
             interfaces,
@@ -345,7 +374,9 @@ public sealed class ProbeRunner
             !options.NoRecursion,
             !options.NoUnicastInterface,
             cancellationToken,
-            context.Edns).ConfigureAwait(false);
+            context.Edns,
+            options.CompareAll,
+            skipped).ConfigureAwait(false);
 
         if (rows.Count == 0)
         {
@@ -366,14 +397,25 @@ public sealed class ProbeRunner
             }
         }
 
+        IReadOnlyList<string> diagnosis = ComparisonDiagnosis.Diagnose(rows, context.Server);
+
         if (options.Json)
         {
-            JsonOutput.WriteComparison(rows, context, exitCode);
+            JsonOutput.WriteComparison(rows, context, exitCode, diagnosis, skipped.Count);
             return exitCode;
         }
 
         _reporter.WriteComparisonTable(rows);
-        _reporter.WriteComparisonSummary(rows, context.Server);
+
+        if (skipped.Count > 0)
+        {
+            _reporter.WriteLine(
+                $"Skipped {skipped.Count} host-internal virtual adapter(s): {string.Join(", ", skipped)}. "
+                + "Use --compare-all to include them.");
+        }
+
+        _reporter.WriteDiagnosis(diagnosis);
+        _reporter.WriteComparisonSummary(rows, context.Server, skipped.Count);
         return exitCode;
     }
 
@@ -490,6 +532,89 @@ public sealed class ProbeRunner
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Walks the same path the query took and reports how far it got. The routing and neighbour
+    /// lookups happen here rather than up front, so a plain successful lookup pays nothing for a
+    /// block it will never print.
+    /// </summary>
+    private void WriteStages(ProbeContext context, DnsQueryAttempt attempt)
+    {
+        _routeInspector.TryGetBestRoute(
+            context.Server.Address,
+            context.SourceAddress,
+            out RouteInfo? route,
+            out string? routeError);
+
+        NeighbourInfo? neighbour = null;
+
+        if (route is not null)
+        {
+            // On-link destinations are their own next hop, so that is the address to look up.
+            IPAddress nextHop = route.IsOnLink ? context.Server.Address : route.NextHop!;
+            neighbour = _routeInspector.GetNeighbour(nextHop, route.InterfaceIndex);
+        }
+
+        _reporter.WriteStages(ProbeStages.Build(attempt, context, route, routeError, neighbour));
+
+        if (neighbour?.Explain() is string explanation)
+        {
+            _reporter.WriteWarning(explanation);
+        }
+    }
+
+    private async Task<int> RunTraceAsync(
+        ProbeOptions options,
+        InterfaceSelectionResult selection,
+        ProbeContext context,
+        AddressFamily family,
+        CancellationToken cancellationToken)
+    {
+        var binding = new SocketBinding(
+            family,
+            options.Transport == DnsTransport.Tcp ? ProtocolType.Tcp : ProtocolType.Udp,
+            selection.SourceAddress,
+            selection.InterfaceIndex,
+            !options.NoUnicastInterface);
+
+        var tracer = new DnsTracer(_client);
+
+        TraceResult trace = await tracer.TraceAsync(
+            context.WireName,
+            context.RecordType,
+            options.RecordClass,
+            binding,
+            family,
+            context.Transport,
+            options.TimeoutMilliseconds,
+            context.Edns,
+            options.TraceServersPerLevel,
+            cancellationToken).ConfigureAwait(false);
+
+        int exitCode = trace.Succeeded ? ExitCodes.Success : ExitCodes.NoResponse;
+
+        if (options.Json)
+        {
+            JsonOutput.WriteTrace(trace, context, exitCode);
+            return exitCode;
+        }
+
+        if (options.Short)
+        {
+            if (trace.Answer is not null)
+            {
+                foreach (DnsRecord record in trace.Answer.Answers)
+                {
+                    _reporter.WriteLine(record.Value);
+                }
+            }
+
+            return exitCode;
+        }
+
+        _reporter.WriteTrace(trace, context.QueryName, context.RecordType, options.Verbose);
+        return exitCode;
     }
 
     /// <summary>Reports a fatal problem in whichever format the user asked for.</summary>
